@@ -116,7 +116,6 @@ type triggerRegistry struct {
 
 func (t *triggerRegistry) WatchingGVKs() []schema.GroupVersionKind {
 	return maps.Keys(t.gvks)
-
 }
 func (t *triggerRegistry) Watch(obj runtime.Object, namespace, name string, sel labels.Selector, fields fields.Selector) error {
 	gvk, ok, err := t.trigger.Register(t.gvk, t.key, obj, namespace, name, sel, fields)

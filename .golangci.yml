@@ -1,22 +1,51 @@
+version: "2"
 run:
-  timeout: 5m
-
-output:
-  format: github-actions
-
-skip-files:
-  - "*generated*.go$"
-
+  allow-parallel-runners: true
 linters:
-  disable-all: true
+  default: none
   enable:
+    - dupl
     - errcheck
-    - gofmt
-    - gosimple
+    - ginkgolinter
+    #- goconst
+    - gocyclo
     - govet
     - ineffassign
+    - lll
+    - misspell
+    - nakedret
+    - prealloc
     - staticcheck
-    - typecheck
-    - thelper
+    - unconvert
+    - unparam
     - unused
-  fast: false
+  exclusions:
+    generated: lax
+    rules:
+      - linters:
+          - lll
+        path: cmd/*
+      - linters:
+          - lll
+        path: apiserver/*
+      - linters:
+          - lll
+        path: api/*
+      - linters:
+          - dupl
+          - lll
+        path: internal/*
+    paths:
+      - third_party$
+      - builtin$
+      - examples$
+formatters:
+  enable:
+    - gofmt
+    - goimports
+  exclusions:
+    generated: lax
+    paths:
+      - third_party$
+      - builtin$
+      - examples$
