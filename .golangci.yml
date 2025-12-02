@@ -11,7 +11,7 @@ linters:
     - gocyclo
     - govet
     - ineffassign
-    - lll
+    #- lll
     - misspell
     - nakedret
     - prealloc

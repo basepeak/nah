@@ -244,6 +244,10 @@ func (c *cacheClient) Patch(ctx context.Context, obj kclient.Object, patch kclie
 	return nil
 }
 
+func (c *cacheClient) Apply(ctx context.Context, obj runtime.ApplyConfiguration, opts ...kclient.ApplyOption) error {
+	panic("Apply is not supported")
+}
+
 func (c *cacheClient) DeleteAllOf(ctx context.Context, obj kclient.Object, opts ...kclient.DeleteAllOfOption) error {
 	ctx, span := tracer.Start(ctx, "cachedDeleteAllOf")
 	defer span.End()

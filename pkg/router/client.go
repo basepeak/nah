@@ -89,6 +89,10 @@ func (w *writer) Create(ctx context.Context, obj kclient.Object, opts ...kclient
 	return w.client.Create(ctx, obj, opts...)
 }
 
+func (w *writer) Apply(ctx context.Context, obj runtime.ApplyConfiguration, opts ...kclient.ApplyOption) error {
+	panic("Apply is not supported")
+}
+
 type subResourceClient struct {
 	writer   kclient.SubResourceWriter
 	reader   kclient.SubResourceReader

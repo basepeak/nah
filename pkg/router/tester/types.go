@@ -157,6 +157,10 @@ func (c *Client) Update(ctx context.Context, o kclient.Object, opts ...kclient.U
 	}, o.GetName())
 }
 
+func (c *Client) Apply(ctx context.Context, obj runtime.ApplyConfiguration, opts ...kclient.ApplyOption) error {
+	panic("unsupported")
+}
+
 type Response struct {
 	router.ResponseAttributes
 
