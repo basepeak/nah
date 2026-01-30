@@ -90,7 +90,7 @@ func TestApplyNoPruneRules(t *testing.T) {
 		{segments: []string{"spec", "values"}, strategy: ComparisonStrategyNoPrune},
 	}
 
-	applyNoPruneRules(pruned, original, rules)
+	require.NoError(t, applyNoPruneRules(pruned, original, rules))
 	assert.Equal(t, strings.Repeat("x", 200), pruned["spec"].(map[string]any)["values"])
 	assert.Equal(t, "short", pruned["spec"].(map[string]any)["other"])
 }
@@ -148,15 +148,27 @@ func TestPatchContainsHashedPaths(t *testing.T) {
 	}
 
 	patch := []byte(`{"spec":{"values":"nah-hash:sha256:abc123"}}`)
-	assert.True(t, patchContainsHashedPaths(patch, rules))
+	found, err := patchContainsHashedPaths(patch, rules)
+	require.NoError(t, err)
+	assert.True(t, found)
 
 	patch = []byte(`{"spec":{"values":"real-value"}}`)
-	assert.False(t, patchContainsHashedPaths(patch, rules))
+	found, err = patchContainsHashedPaths(patch, rules)
+	require.NoError(t, err)
+	assert.False(t, found)
 
 	patch = []byte(`{"spec":{"other":"nah-hash:sha256:abc123"}}`)
-	assert.False(t, patchContainsHashedPaths(patch, rules))
+	found, err = patchContainsHashedPaths(patch, rules)
+	require.NoError(t, err)
+	assert.False(t, found)
 
-	assert.False(t, patchContainsHashedPaths([]byte(`{}`), nil))
+	found, err = patchContainsHashedPaths([]byte(`{}`), nil)
+	require.NoError(t, err)
+	assert.False(t, found)
+
+	// Invalid JSON returns an error.
+	_, err = patchContainsHashedPaths([]byte(`{invalid`), rules)
+	assert.Error(t, err)
 }
 
 func TestReplaceHashedPathsWithCurrentValues(t *testing.T) {

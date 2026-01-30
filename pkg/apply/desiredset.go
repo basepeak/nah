@@ -100,19 +100,34 @@ func (a apply) WithOwnerSubContext(ownerSubContext string) Apply {
 	return a
 }
 
+// WithComparisonStrategy adds global comparison strategies that apply to all
+// GVKs. Each strategy maps a dot-separated field path to a comparison behavior
+// (NoPrune or Hash). Panics if any path is malformed (empty or contains empty
+// segments).
 func (a apply) WithComparisonStrategy(strategies ...ComparisonStrategy) Apply {
+	rules, err := parseStrategies(strategies)
+	if err != nil {
+		panic(err)
+	}
 	cfg := a.copyComparisonConfig()
-	cfg.global = append(cfg.global, parseStrategies(strategies)...)
+	cfg.global = append(cfg.global, rules...)
 	a.comparison = cfg
 	return a
 }
 
+// WithComparisonStrategyForGVK adds comparison strategies scoped to a specific
+// GroupVersionKind. These are merged with any global strategies at comparison
+// time. Panics if any path is malformed (empty or contains empty segments).
 func (a apply) WithComparisonStrategyForGVK(gvk schema.GroupVersionKind, strategies ...ComparisonStrategy) Apply {
+	rules, err := parseStrategies(strategies)
+	if err != nil {
+		panic(err)
+	}
 	cfg := a.copyComparisonConfig()
 	if cfg.byGVK == nil {
 		cfg.byGVK = make(map[schema.GroupVersionKind][]pathRule)
 	}
-	cfg.byGVK[gvk] = append(cfg.byGVK[gvk], parseStrategies(strategies)...)
+	cfg.byGVK[gvk] = append(cfg.byGVK[gvk], rules...)
 	a.comparison = cfg
 	return a
 }
