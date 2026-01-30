@@ -12,14 +12,18 @@ var (
 	LogInfo func(format string, args ...any)
 )
 
-func (a *apply) log(operation string, gvk schema.GroupVersionKind, obj kclient.Object) {
+func (a *apply) log(operation string, gvk schema.GroupVersionKind, obj kclient.Object, diff ...string) {
 	if LogInfo == nil {
 		return
 	}
+	extra := ""
+	if len(diff) > 0 && diff[0] != "" {
+		extra = " diff: " + diff[0]
+	}
 	if a.ensure {
-		LogInfo("apply: %s [%s] [%s]", operation, logKey(obj), gvk)
+		LogInfo("apply: %s [%s] [%s]%s", operation, logKey(obj), gvk, extra)
 	} else {
-		LogInfo("apply: %s [%s] [%s] by owner %s", operation, logKey(obj), gvk, a.ownerLogKey())
+		LogInfo("apply: %s [%s] [%s] by owner %s%s", operation, logKey(obj), gvk, a.ownerLogKey(), extra)
 	}
 }
 
