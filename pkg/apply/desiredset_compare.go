@@ -43,8 +43,8 @@ var (
 	}
 )
 
-func prepareObjectForCreate(gvk schema.GroupVersionKind, obj kclient.Object, clone bool) (kclient.Object, error) {
-	serialized, err := serializeApplied(obj)
+func prepareObjectForCreate(gvk schema.GroupVersionKind, obj kclient.Object, clone bool, rules []pathRule) (kclient.Object, error) {
+	serialized, err := serializeApplied(obj, rules)
 	if err != nil {
 		return nil, err
 	}
@@ -78,13 +78,13 @@ func prepareObjectForCreate(gvk schema.GroupVersionKind, obj kclient.Object, clo
 	return obj, nil
 }
 
-func originalAndModified(gvk schema.GroupVersionKind, oldMetadata v1.Object, newObject kclient.Object) ([]byte, []byte, error) {
+func originalAndModified(gvk schema.GroupVersionKind, oldMetadata v1.Object, newObject kclient.Object, rules []pathRule) ([]byte, []byte, error) {
 	original, err := getOriginalBytes(gvk, oldMetadata)
 	if err != nil {
 		return nil, nil, err
 	}
 
-	newObject, err = prepareObjectForCreate(gvk, newObject, true)
+	newObject, err = prepareObjectForCreate(gvk, newObject, true, rules)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -182,7 +182,9 @@ func sanitizePatch(patch []byte, removeObjectSetAnnotation bool) ([]byte, error)
 }
 
 func (a *apply) applyPatch(gvk schema.GroupVersionKind, debugID string, oldObject, newObject kclient.Object) (bool, error) {
-	original, modified, err := originalAndModified(gvk, oldObject, newObject)
+	rules := a.comparison.rulesFor(gvk)
+
+	original, modified, err := originalAndModified(gvk, oldObject, newObject, rules)
 	if err != nil {
 		return false, err
 	}
@@ -192,7 +194,17 @@ func (a *apply) applyPatch(gvk schema.GroupVersionKind, debugID string, oldObjec
 		return false, err
 	}
 
-	patchType, patch, err := createPatch(gvk, original, modified, current)
+	// Phase 1: For hash rules, compare using hashed representations.
+	modifiedForCompare, err := applyHashRulesOnBytes(modified, rules)
+	if err != nil {
+		return false, fmt.Errorf("hash modified: %w", err)
+	}
+	currentForCompare, err := applyHashRulesOnBytes(current, rules)
+	if err != nil {
+		return false, fmt.Errorf("hash current: %w", err)
+	}
+
+	patchType, patch, err := createPatch(gvk, original, modifiedForCompare, currentForCompare)
 	if err != nil {
 		return false, fmt.Errorf("patch generation: %w", err)
 	}
@@ -210,10 +222,32 @@ func (a *apply) applyPatch(gvk schema.GroupVersionKind, debugID string, oldObjec
 		return false, nil
 	}
 
+	// Phase 2: If the patch contains hashed paths, regenerate with real values.
+	if patchContainsHashedPaths(patch, rules) {
+		originalForApply, err := replaceHashedPathsWithCurrentValues(original, current, rules)
+		if err != nil {
+			return false, fmt.Errorf("replace hashed paths: %w", err)
+		}
+		patchType, patch, err = createPatch(gvk, originalForApply, modified, current)
+		if err != nil {
+			return false, fmt.Errorf("patch generation (phase 2): %w", err)
+		}
+		if string(patch) == "{}" {
+			return false, nil
+		}
+		patch, err = sanitizePatch(patch, false)
+		if err != nil {
+			return false, err
+		}
+		if string(patch) == "{}" {
+			return false, nil
+		}
+	}
+
 	log.Debugf("DesiredSet - Patch %s %s/%s for %s -- [PATCH:%s, ORIGINAL:%s, MODIFIED:%s, CURRENT:%s]", gvk, oldObject.GetNamespace(), oldObject.GetName(), debugID, patch, original, modified, current)
 	reconciler := a.reconcilers[gvk]
 	if reconciler != nil {
-		newObject, err := prepareObjectForCreate(gvk, newObject, true)
+		newObject, err := prepareObjectForCreate(gvk, newObject, true, rules)
 		if err != nil {
 			return false, err
 		}
@@ -300,7 +334,7 @@ func getOriginalObject(gvk schema.GroupVersionKind, obj v1.Object) (kclient.Obje
 	removeMetadataFields(mapObj)
 	return prepareObjectForCreate(gvk, &unstructured.Unstructured{
 		Object: mapObj,
-	}, true)
+	}, true, nil)
 }
 
 func getOriginalBytes(gvk schema.GroupVersionKind, obj v1.Object) ([]byte, error) {
@@ -383,12 +417,33 @@ func pruneValues(data map[string]any, isList bool) map[string]any {
 	return result
 }
 
-func serializeApplied(obj kclient.Object) ([]byte, error) {
+func serializeApplied(obj kclient.Object, rules []pathRule) ([]byte, error) {
 	data, err := data.ToMapInterface(obj)
 	if err != nil {
 		return nil, err
 	}
+
+	// Deep-copy data before pruning so we can restore NoPrune paths.
+	var originalData map[string]any
+	if len(rules) > 0 {
+		b, err := json.Marshal(data)
+		if err != nil {
+			return nil, err
+		}
+		if err := json.Unmarshal(b, &originalData); err != nil {
+			return nil, err
+		}
+	}
+
 	data = pruneValues(data, false)
+
+	if len(rules) > 0 {
+		applyNoPruneRules(data, originalData, rules)
+		if err := applyHashRules(data, rules); err != nil {
+			return nil, err
+		}
+	}
+
 	return json.Marshal(data)
 }
 

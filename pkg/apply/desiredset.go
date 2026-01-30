@@ -25,6 +25,7 @@ type apply struct {
 	ownerGVK         schema.GroupVersionKind
 	ensure           bool
 	noPrune          bool
+	comparison       *comparisonConfig
 }
 
 func (a apply) Ensure(ctx context.Context, objs ...kclient.Object) error {
@@ -97,4 +98,38 @@ func (a apply) WithNamespace(ns string) Apply {
 func (a apply) WithOwnerSubContext(ownerSubContext string) Apply {
 	a.ownerSubContext = ownerSubContext
 	return a
+}
+
+func (a apply) WithComparisonStrategy(strategies ...ComparisonStrategy) Apply {
+	cfg := a.copyComparisonConfig()
+	cfg.global = append(cfg.global, parseStrategies(strategies)...)
+	a.comparison = cfg
+	return a
+}
+
+func (a apply) WithComparisonStrategyForGVK(gvk schema.GroupVersionKind, strategies ...ComparisonStrategy) Apply {
+	cfg := a.copyComparisonConfig()
+	if cfg.byGVK == nil {
+		cfg.byGVK = make(map[schema.GroupVersionKind][]pathRule)
+	}
+	cfg.byGVK[gvk] = append(cfg.byGVK[gvk], parseStrategies(strategies)...)
+	a.comparison = cfg
+	return a
+}
+
+func (a apply) copyComparisonConfig() *comparisonConfig {
+	cfg := &comparisonConfig{}
+	if a.comparison != nil {
+		cfg.global = make([]pathRule, len(a.comparison.global))
+		copy(cfg.global, a.comparison.global)
+		if a.comparison.byGVK != nil {
+			cfg.byGVK = make(map[schema.GroupVersionKind][]pathRule, len(a.comparison.byGVK))
+			for k, v := range a.comparison.byGVK {
+				rules := make([]pathRule, len(v))
+				copy(rules, v)
+				cfg.byGVK[k] = rules
+			}
+		}
+	}
+	return cfg
 }

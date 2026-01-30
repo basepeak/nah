@@ -208,8 +208,10 @@ func (a *apply) process(debugID string, set labels.Selector, gvk schema.GroupVer
 	// check for resources in the objectset but under a different version of the same group/kind
 	toDelete = a.filterCrossVersion(allObjs, gvk, toDelete)
 
+	rules := a.comparison.rulesFor(gvk)
+
 	createF := func(k objectset.ObjectKey) error {
-		obj, err := prepareObjectForCreate(gvk, objs[k], !a.ensure)
+		obj, err := prepareObjectForCreate(gvk, objs[k], !a.ensure, rules)
 		if err != nil {
 			return fmt.Errorf("failed to prepare create %s %s for %s: %w", k, gvk, debugID, err)
 		}

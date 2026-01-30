@@ -33,6 +33,8 @@ type Apply interface {
 	WithPruneGVKs(gvks ...schema.GroupVersionKind) Apply
 	WithPruneTypes(gvks ...kclient.Object) Apply
 	WithNoPrune() Apply
+	WithComparisonStrategy(strategies ...ComparisonStrategy) Apply
+	WithComparisonStrategyForGVK(gvk schema.GroupVersionKind, strategies ...ComparisonStrategy) Apply
 
 	FindOwner(ctx context.Context, obj kclient.Object) (kclient.Object, error)
 	PurgeOrphan(ctx context.Context, obj kclient.Object) error
