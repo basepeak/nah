@@ -253,7 +253,7 @@ func (b *Harness) InvokeWithContext(t *testing.T, ctx context.Context, input kcl
 
 func (b *Harness) SanitizedYAML(t *testing.T, objs []kclient.Object) string {
 	t.Helper()
-	var yamls []string
+	yamls := make([]string, 0, len(objs))
 	for _, o := range objs {
 		gvk, err := apiutil.GVKForObject(o, b.Scheme)
 		require.NoError(t, err)

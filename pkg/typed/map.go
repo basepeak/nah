@@ -46,7 +46,7 @@ func SortedValues[K constraints.Ordered, V any](data map[K]V) (result []V) {
 }
 
 func Sorted[K constraints.Ordered, V any](data map[K]V) []Entry[K, V] {
-	var result []Entry[K, V]
+	result := make([]Entry[K, V], 0, len(data))
 	for _, key := range SortedKeys(data) {
 		result = append(result, Entry[K, V]{
 			Key:   key,
