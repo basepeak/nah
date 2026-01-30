@@ -171,6 +171,60 @@ func TestPatchContainsHashedPaths(t *testing.T) {
 	assert.Error(t, err)
 }
 
+func TestSetNestedValue_SingleSegment(t *testing.T) {
+	data := map[string]any{
+		"topLevel": "old",
+	}
+
+	ok := setNestedValue(data, []string{"topLevel"}, "new")
+	assert.True(t, ok)
+	assert.Equal(t, "new", data["topLevel"])
+
+	// Setting a key that doesn't exist yet on the root map.
+	ok = setNestedValue(data, []string{"brand-new"}, "created")
+	assert.True(t, ok)
+	assert.Equal(t, "created", data["brand-new"])
+}
+
+func TestApplyNoPruneRules_ErrorOnMissingPath(t *testing.T) {
+	// The pruned map has a different structure than the original at the
+	// intermediate path, so setNestedValue should fail.
+	original := map[string]any{
+		"spec": map[string]any{
+			"values": "full-value",
+		},
+	}
+	pruned := map[string]any{
+		"spec": "not-a-map", // intermediate is not a map
+	}
+
+	rules := []pathRule{
+		{segments: []string{"spec", "values"}, strategy: ComparisonStrategyNoPrune},
+	}
+
+	err := applyNoPruneRules(pruned, original, rules)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "spec.values")
+}
+
+func TestApplyHashRulesOnBytes_NoPruneOnlyReturnsUnchanged(t *testing.T) {
+	data := map[string]any{
+		"spec": map[string]any{
+			"values": map[string]any{"key": "val"},
+		},
+	}
+	b, _ := json.Marshal(data)
+
+	// Rules with only NoPrune — no Hash rules present.
+	rules := []pathRule{
+		{segments: []string{"spec", "values"}, strategy: ComparisonStrategyNoPrune},
+	}
+
+	result, err := applyHashRulesOnBytes(b, rules)
+	require.NoError(t, err)
+	assert.Equal(t, b, result)
+}
+
 func TestReplaceHashedPathsWithCurrentValues(t *testing.T) {
 	h, _ := hashSubtree(map[string]any{"key": "old"})
 	original := map[string]any{
@@ -199,4 +253,53 @@ func TestReplaceHashedPathsWithCurrentValues(t *testing.T) {
 	require.NoError(t, json.Unmarshal(result, &out))
 
 	assert.Equal(t, map[string]any{"key": "old"}, out["spec"].(map[string]any)["values"])
+}
+
+func TestParseStrategies_Valid(t *testing.T) {
+	rules, err := parseStrategies([]ComparisonStrategy{
+		{Path: "spec.values", Strategy: ComparisonStrategyHash},
+		{Path: "data", Strategy: ComparisonStrategyNoPrune},
+	})
+	require.NoError(t, err)
+	assert.Len(t, rules, 2)
+	assert.Equal(t, []string{"spec", "values"}, rules[0].segments)
+	assert.Equal(t, []string{"data"}, rules[1].segments)
+}
+
+func TestParseStrategies_EmptyPath(t *testing.T) {
+	_, err := parseStrategies([]ComparisonStrategy{
+		{Path: "", Strategy: ComparisonStrategyHash},
+	})
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "must not be empty")
+}
+
+func TestParseStrategies_LeadingDot(t *testing.T) {
+	_, err := parseStrategies([]ComparisonStrategy{
+		{Path: ".spec.values", Strategy: ComparisonStrategyHash},
+	})
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "empty segment")
+}
+
+func TestParseStrategies_TrailingDot(t *testing.T) {
+	_, err := parseStrategies([]ComparisonStrategy{
+		{Path: "spec.values.", Strategy: ComparisonStrategyHash},
+	})
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "empty segment")
+}
+
+func TestParseStrategies_DoubleDot(t *testing.T) {
+	_, err := parseStrategies([]ComparisonStrategy{
+		{Path: "spec..values", Strategy: ComparisonStrategyHash},
+	})
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "empty segment")
+}
+
+func TestComparisonStrategyType_String(t *testing.T) {
+	assert.Equal(t, "NoPrune", ComparisonStrategyNoPrune.String())
+	assert.Equal(t, "Hash", ComparisonStrategyHash.String())
+	assert.Equal(t, "ComparisonStrategyType(99)", ComparisonStrategyType(99).String())
 }

@@ -259,6 +259,202 @@ func TestOriginalAndModified_HashNoSpuriousDiff(t *testing.T) {
 	assert.Equal(t, "{}", string(patch))
 }
 
+func TestOriginalAndModified_HashDetectsRealChange(t *testing.T) {
+	rules := []pathRule{
+		{segments: []string{"spec", "values"}, strategy: ComparisonStrategyHash},
+	}
+
+	// Use an unregistered GVK for JSON merge patch.
+	obj := makeUnstructured(map[string]any{
+		"apiVersion": "example.io/v1",
+		"kind":       "HelmRelease",
+		"metadata": map[string]any{
+			"name":      "test",
+			"namespace": "default",
+		},
+		"spec": map[string]any{
+			"values": map[string]any{
+				"key": "old-value",
+			},
+		},
+	})
+
+	gvk := obj.GroupVersionKind()
+	prepared, err := prepareObjectForCreate(gvk, obj, true, rules)
+	require.NoError(t, err)
+
+	// Desired object has DIFFERENT values.
+	desired := makeUnstructured(map[string]any{
+		"apiVersion": "example.io/v1",
+		"kind":       "HelmRelease",
+		"metadata": map[string]any{
+			"name":      "test",
+			"namespace": "default",
+		},
+		"spec": map[string]any{
+			"values": map[string]any{
+				"key": "new-value",
+			},
+		},
+	})
+
+	original, modified, err := originalAndModified(gvk, prepared, desired, rules)
+	require.NoError(t, err)
+
+	current, err := json.Marshal(prepared)
+	require.NoError(t, err)
+
+	// Phase 1: hashed comparison should detect the change.
+	modifiedHashed, err := applyHashRulesOnBytes(modified, rules)
+	require.NoError(t, err)
+	currentHashed, err := applyHashRulesOnBytes(current, rules)
+	require.NoError(t, err)
+
+	_, patch, err := createPatch(gvk, original, modifiedHashed, currentHashed)
+	require.NoError(t, err)
+	assert.NotEqual(t, "{}", string(patch), "Phase 1 should detect hash difference")
+
+	// The patch should contain the hash prefix (triggering Phase 2).
+	found, err := patchContainsHashedPaths(patch, rules)
+	require.NoError(t, err)
+	assert.True(t, found)
+
+	// Phase 2: regenerate with real values.
+	originalForApply, err := replaceHashedPathsWithCurrentValues(original, current, rules)
+	require.NoError(t, err)
+
+	_, phase2Patch, err := createPatch(gvk, originalForApply, modified, current)
+	require.NoError(t, err)
+	assert.NotEqual(t, "{}", string(phase2Patch), "Phase 2 should produce a real patch")
+
+	// Phase 2 patch should contain the actual new value, not hash markers.
+	assert.Contains(t, string(phase2Patch), "new-value")
+	assert.NotContains(t, string(phase2Patch), hashPrefix)
+}
+
+func TestWithComparisonStrategy_CopyOnWrite(t *testing.T) {
+	base := apply{
+		defaultNamespace: "default",
+	}
+
+	stratA := ComparisonStrategy{Path: "spec.a", Strategy: ComparisonStrategyNoPrune}
+	stratB := ComparisonStrategy{Path: "spec.b", Strategy: ComparisonStrategyHash}
+
+	a1 := base.WithComparisonStrategy(stratA).(apply)
+	a2 := base.WithComparisonStrategy(stratB).(apply)
+
+	// base should have no comparison config.
+	assert.Nil(t, base.comparison)
+
+	// a1 should only have stratA.
+	gvk := schema.GroupVersionKind{Group: "test", Version: "v1", Kind: "Foo"}
+	rulesA := a1.comparison.rulesFor(gvk)
+	require.Len(t, rulesA, 1)
+	assert.Equal(t, []string{"spec", "a"}, rulesA[0].segments)
+
+	// a2 should only have stratB, not stratA.
+	rulesB := a2.comparison.rulesFor(gvk)
+	require.Len(t, rulesB, 1)
+	assert.Equal(t, []string{"spec", "b"}, rulesB[0].segments)
+}
+
+func TestSerializeApplied_CombinedStrategies(t *testing.T) {
+	longStr := strings.Repeat("f", 200)
+	obj := makeUnstructured(map[string]any{
+		"apiVersion": "example.io/v1",
+		"kind":       "HelmRelease",
+		"metadata": map[string]any{
+			"name":      "test",
+			"namespace": "default",
+		},
+		"spec": map[string]any{
+			"config": longStr,
+			"values": map[string]any{
+				"nested": "data",
+			},
+		},
+	})
+
+	rules := []pathRule{
+		{segments: []string{"spec", "config"}, strategy: ComparisonStrategyNoPrune},
+		{segments: []string{"spec", "values"}, strategy: ComparisonStrategyHash},
+	}
+
+	b, err := serializeApplied(obj, rules)
+	require.NoError(t, err)
+
+	var result map[string]any
+	require.NoError(t, json.Unmarshal(b, &result))
+
+	spec := result["spec"].(map[string]any)
+
+	// NoPrune path should have the full string.
+	assert.Equal(t, longStr, spec["config"])
+
+	// Hash path should have a hash marker.
+	valStr, ok := spec["values"].(string)
+	require.True(t, ok)
+	assert.True(t, strings.HasPrefix(valStr, hashPrefix))
+}
+
+func TestCombinedStrategies_NoSpuriousDiff(t *testing.T) {
+	longStr := strings.Repeat("g", 200)
+	rules := []pathRule{
+		{segments: []string{"spec", "config"}, strategy: ComparisonStrategyNoPrune},
+		{segments: []string{"spec", "values"}, strategy: ComparisonStrategyHash},
+	}
+
+	obj := makeUnstructured(map[string]any{
+		"apiVersion": "example.io/v1",
+		"kind":       "HelmRelease",
+		"metadata": map[string]any{
+			"name":      "test",
+			"namespace": "default",
+		},
+		"spec": map[string]any{
+			"config": longStr,
+			"values": map[string]any{
+				"nested": strings.Repeat("h", 200),
+			},
+		},
+	})
+
+	gvk := obj.GroupVersionKind()
+	prepared, err := prepareObjectForCreate(gvk, obj, true, rules)
+	require.NoError(t, err)
+
+	// Same desired object.
+	desired := makeUnstructured(map[string]any{
+		"apiVersion": "example.io/v1",
+		"kind":       "HelmRelease",
+		"metadata": map[string]any{
+			"name":      "test",
+			"namespace": "default",
+		},
+		"spec": map[string]any{
+			"config": longStr,
+			"values": map[string]any{
+				"nested": strings.Repeat("h", 200),
+			},
+		},
+	})
+
+	original, modified, err := originalAndModified(gvk, prepared, desired, rules)
+	require.NoError(t, err)
+
+	current, err := json.Marshal(prepared)
+	require.NoError(t, err)
+
+	modifiedHashed, err := applyHashRulesOnBytes(modified, rules)
+	require.NoError(t, err)
+	currentHashed, err := applyHashRulesOnBytes(current, rules)
+	require.NoError(t, err)
+
+	_, patch, err := createPatch(gvk, original, modifiedHashed, currentHashed)
+	require.NoError(t, err)
+	assert.Equal(t, "{}", string(patch))
+}
+
 func TestComparisonConfig_RulesFor(t *testing.T) {
 	gvk := schema.GroupVersionKind{Group: "test", Version: "v1", Kind: "Foo"}
 	otherGVK := schema.GroupVersionKind{Group: "test", Version: "v1", Kind: "Bar"}
