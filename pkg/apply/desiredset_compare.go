@@ -194,7 +194,9 @@ func (a *apply) applyPatch(gvk schema.GroupVersionKind, debugID string, oldObjec
 		return false, err
 	}
 
-	// Phase 1: For hash rules, compare using hashed representations.
+	// Phase 1: Compare using hashed representations. The original (annotation)
+	// bytes already contain hashes from serialization, so only modified and
+	// current need hashing here.
 	modifiedForCompare, err := applyHashRulesOnBytes(modified, rules)
 	if err != nil {
 		return false, fmt.Errorf("hash modified: %w", err)
@@ -222,8 +224,15 @@ func (a *apply) applyPatch(gvk schema.GroupVersionKind, debugID string, oldObjec
 		return false, nil
 	}
 
-	// Phase 2: If the patch contains hashed paths, regenerate with real values.
-	if patchContainsHashedPaths(patch, rules) {
+	// Phase 2: If the patch contains hashed paths, a real change was detected
+	// at those paths. Regenerate with real values by replacing hash markers in
+	// the original with live cluster values, then recomputing the patch using
+	// un-hashed modified and current.
+	containsHashed, err := patchContainsHashedPaths(patch, rules)
+	if err != nil {
+		return false, fmt.Errorf("check hashed paths: %w", err)
+	}
+	if containsHashed {
 		originalForApply, err := replaceHashedPathsWithCurrentValues(original, current, rules)
 		if err != nil {
 			return false, fmt.Errorf("replace hashed paths: %w", err)
@@ -438,9 +447,22 @@ func serializeApplied(obj kclient.Object, rules []pathRule) ([]byte, error) {
 	data = pruneValues(data, false)
 
 	if len(rules) > 0 {
-		applyNoPruneRules(data, originalData, rules)
-		if err := applyHashRules(data, rules); err != nil {
+		if err := applyNoPruneRules(data, originalData, rules); err != nil {
 			return nil, err
+		}
+		// Compute hashes from the un-pruned originalData so that the stored
+		// hashes match what applyHashRulesOnBytes produces on full object
+		// bodies during comparison. This avoids Phase 1 false positives.
+		if err := applyHashRules(originalData, rules); err != nil {
+			return nil, err
+		}
+		for _, r := range rules {
+			if r.strategy != ComparisonStrategyHash {
+				continue
+			}
+			if val, ok := getNestedValue(originalData, r.segments); ok {
+				setNestedValue(data, r.segments, val)
+			}
 		}
 	}
 

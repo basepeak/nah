@@ -8,6 +8,14 @@ import (
 	"strings"
 )
 
+// jsonNumberDecoder unmarshals JSON while preserving number precision by using
+// json.Number instead of float64.
+func jsonUnmarshalPreserveNumbers(b []byte, v any) error {
+	dec := json.NewDecoder(strings.NewReader(string(b)))
+	dec.UseNumber()
+	return dec.Decode(v)
+}
+
 // getNestedValue retrieves a value from a nested map using path segments.
 func getNestedValue(data map[string]any, segments []string) (any, bool) {
 	if len(segments) == 0 {
@@ -50,7 +58,8 @@ func setNestedValue(data map[string]any, segments []string, value any) bool {
 }
 
 // hashSubtree computes a deterministic SHA-256 hash of a JSON-serializable value,
-// returning a prefixed hex string.
+// returning a prefixed hex string. Determinism relies on Go's json.Marshal
+// sorting map keys alphabetically.
 func hashSubtree(value any) (string, error) {
 	b, err := json.Marshal(value)
 	if err != nil {
@@ -61,8 +70,10 @@ func hashSubtree(value any) (string, error) {
 }
 
 // applyNoPruneRules restores the original (un-pruned) values at NoPrune paths
-// in the pruned data map.
-func applyNoPruneRules(pruned, original map[string]any, rules []pathRule) {
+// in the pruned data map. This is needed because pruneValues() is applied
+// globally first (for backward compatibility), and NoPrune paths must then be
+// selectively restored to preserve full fidelity for the three-way merge.
+func applyNoPruneRules(pruned, original map[string]any, rules []pathRule) error {
 	for _, r := range rules {
 		if r.strategy != ComparisonStrategyNoPrune {
 			continue
@@ -71,8 +82,11 @@ func applyNoPruneRules(pruned, original map[string]any, rules []pathRule) {
 		if !ok {
 			continue
 		}
-		setNestedValue(pruned, r.segments, origVal)
+		if !setNestedValue(pruned, r.segments, origVal) {
+			return fmt.Errorf("failed to restore NoPrune value at path %s", strings.Join(r.segments, "."))
+		}
 	}
+	return nil
 }
 
 // applyHashRules replaces Hash-path subtrees with their hash markers in-place.
@@ -89,12 +103,17 @@ func applyHashRules(data map[string]any, rules []pathRule) error {
 		if err != nil {
 			return err
 		}
-		setNestedValue(data, r.segments, h)
+		if !setNestedValue(data, r.segments, h) {
+			return fmt.Errorf("failed to set hash at path %s", strings.Join(r.segments, "."))
+		}
 	}
 	return nil
 }
 
-// applyHashRulesOnBytes applies hash rules to JSON bytes via round-trip.
+// applyHashRulesOnBytes unmarshals JSON bytes, applies hash rules to the
+// resulting map, and re-marshals back to JSON. Returns the input bytes
+// unchanged if no Hash-strategy rules are present. Uses json.Number to
+// preserve integer precision during the round-trip.
 func applyHashRulesOnBytes(b []byte, rules []pathRule) ([]byte, error) {
 	if len(rules) == 0 {
 		return b, nil
@@ -111,24 +130,24 @@ func applyHashRulesOnBytes(b []byte, rules []pathRule) ([]byte, error) {
 	}
 
 	var data map[string]any
-	if err := json.Unmarshal(b, &data); err != nil {
-		return nil, err
+	if err := jsonUnmarshalPreserveNumbers(b, &data); err != nil {
+		return nil, fmt.Errorf("applyHashRulesOnBytes: unmarshal: %w", err)
 	}
 	if err := applyHashRules(data, rules); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("applyHashRulesOnBytes: apply rules: %w", err)
 	}
 	return json.Marshal(data)
 }
 
 // patchContainsHashedPaths checks if any hash-strategy path appears in the patch
 // with a value that starts with the hash prefix.
-func patchContainsHashedPaths(patch []byte, rules []pathRule) bool {
+func patchContainsHashedPaths(patch []byte, rules []pathRule) (bool, error) {
 	if len(rules) == 0 {
-		return false
+		return false, nil
 	}
 	var data map[string]any
 	if err := json.Unmarshal(patch, &data); err != nil {
-		return false
+		return false, fmt.Errorf("patchContainsHashedPaths: unmarshal patch: %w", err)
 	}
 	for _, r := range rules {
 		if r.strategy != ComparisonStrategyHash {
@@ -139,10 +158,10 @@ func patchContainsHashedPaths(patch []byte, rules []pathRule) bool {
 			continue
 		}
 		if s, ok := val.(string); ok && strings.HasPrefix(s, hashPrefix) {
-			return true
+			return true, nil
 		}
 	}
-	return false
+	return false, nil
 }
 
 // replaceHashedPathsWithCurrentValues takes the original (annotation) bytes and
@@ -151,12 +170,12 @@ func patchContainsHashedPaths(patch []byte, rules []pathRule) bool {
 // to produce a correct applicable patch with real values.
 func replaceHashedPathsWithCurrentValues(original, current []byte, rules []pathRule) ([]byte, error) {
 	var origData map[string]any
-	if err := json.Unmarshal(original, &origData); err != nil {
-		return nil, err
+	if err := jsonUnmarshalPreserveNumbers(original, &origData); err != nil {
+		return nil, fmt.Errorf("unmarshal original annotation: %w", err)
 	}
 	var curData map[string]any
-	if err := json.Unmarshal(current, &curData); err != nil {
-		return nil, err
+	if err := jsonUnmarshalPreserveNumbers(current, &curData); err != nil {
+		return nil, fmt.Errorf("unmarshal current object: %w", err)
 	}
 
 	for _, r := range rules {
@@ -167,7 +186,9 @@ func replaceHashedPathsWithCurrentValues(original, current []byte, rules []pathR
 		if !ok {
 			continue
 		}
-		setNestedValue(origData, r.segments, curVal)
+		if !setNestedValue(origData, r.segments, curVal) {
+			return nil, fmt.Errorf("failed to replace hashed path %s with current value", strings.Join(r.segments, "."))
+		}
 	}
 	return json.Marshal(origData)
 }
