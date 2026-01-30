@@ -113,10 +113,7 @@ func (s *sharedControllerFactory) loadAndStart(ctx context.Context, start bool) 
 
 	if start {
 		for gvk, controller := range controllersCopy {
-			w, err := s.getWorkers(gvk)
-			if err != nil {
-				return err
-			}
+			w := s.getWorkers(gvk)
 			if err := controller.Start(ctx, w); err != nil {
 				return err
 			}
@@ -163,11 +160,11 @@ func (s *sharedControllerFactory) ForKind(ctx context.Context, gvk schema.GroupV
 	return controllerResult, nil
 }
 
-func (s *sharedControllerFactory) getWorkers(gvk schema.GroupVersionKind) (int, error) {
+func (s *sharedControllerFactory) getWorkers(gvk schema.GroupVersionKind) int {
 	if w, ok := s.kindWorkers[gvk]; ok {
-		return w, nil
+		return w
 	}
-	return s.workers, nil
+	return s.workers
 }
 
 func (s *sharedControllerFactory) byGVK(gvk schema.GroupVersionKind) *sharedController {

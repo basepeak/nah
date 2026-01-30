@@ -243,7 +243,7 @@ func (a *apply) process(debugID string, set labels.Selector, gvk schema.GroupVer
 		return nil
 	}
 
-	deleteF := func(k objectset.ObjectKey, force bool) error {
+	deleteF := func(k objectset.ObjectKey) error {
 		if err := a.delete(gvk, k.Namespace, k.Name); err != nil {
 			return fmt.Errorf("failed to delete %s %s for %s: %w", k, gvk, debugID, err)
 		}
@@ -274,12 +274,12 @@ func (a *apply) process(debugID string, set labels.Selector, gvk schema.GroupVer
 
 	if !a.noPrune {
 		for _, k := range toDelete {
-			errs = append(errs, deleteF(k, false))
+			errs = append(errs, deleteF(k))
 		}
 	}
 
 	for _, k := range toReplace {
-		errs = append(errs, deleteF(k, false))
+		errs = append(errs, deleteF(k))
 	}
 
 	for _, k := range toReplace {
@@ -357,7 +357,6 @@ func (a *apply) newObj(gvk schema.GroupVersionKind, list bool) (runtime.Object, 
 
 func (a *apply) listBySelector(gvk schema.GroupVersionKind, selector labels.Selector) (map[objectset.ObjectKey]kclient.Object, error) {
 	var (
-		errs []error
 		objs = objectset.ObjectByKey{}
 		list kclient.ObjectList
 	)
@@ -377,16 +376,14 @@ func (a *apply) listBySelector(gvk schema.GroupVersionKind, selector labels.Sele
 	}
 
 	err = meta.EachListItem(list, func(obj runtime.Object) error {
-		if err := addObjectToMap(objs, obj.(kclient.Object)); err != nil {
-			errs = append(errs, err)
-		}
+		addObjectToMap(objs, obj.(kclient.Object))
 		return nil
 	})
 	if err != nil {
 		return nil, err
 	}
 
-	return objs, merr.NewErrors(errs...)
+	return objs, nil
 }
 
 func should(obj kclient.Object, label string) bool {
@@ -427,11 +424,9 @@ func sortObjectKeys(keys []objectset.ObjectKey) {
 	})
 }
 
-func addObjectToMap(objs objectset.ObjectByKey, obj kclient.Object) error {
+func addObjectToMap(objs objectset.ObjectByKey, obj kclient.Object) {
 	objs[objectset.ObjectKey{
 		Namespace: obj.GetNamespace(),
 		Name:      obj.GetName(),
 	}] = obj
-
-	return nil
 }

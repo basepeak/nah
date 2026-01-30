@@ -34,7 +34,7 @@ func (l *lock) Get(context.Context) (*resourcelock.LeaderElectionRecord, []byte,
 		}
 		return nil, nil, err
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 
 	byteData, err := io.ReadAll(file)
 	if err != nil {
@@ -69,12 +69,16 @@ func (l *lock) Update(_ context.Context, ler resourcelock.LeaderElectionRecord) 
 	return l.writeToFile(ler, os.O_WRONLY|os.O_TRUNC)
 }
 
-func (l *lock) writeToFile(ler resourcelock.LeaderElectionRecord, flag int) error {
+func (l *lock) writeToFile(ler resourcelock.LeaderElectionRecord, flag int) (retErr error) {
 	file, err := os.OpenFile(l.file, flag, 0644)
 	if err != nil {
 		return err
 	}
-	defer file.Close()
+	defer func() {
+		if closeErr := file.Close(); closeErr != nil && retErr == nil {
+			retErr = closeErr
+		}
+	}()
 
 	if err = json.NewEncoder(file).Encode(ler); err != nil {
 		return err

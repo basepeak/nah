@@ -128,7 +128,7 @@ func (t *triggerRegistry) Watch(obj runtime.Object, namespace, name string, sel 
 	return nil
 }
 
-func (m *HandlerSet) newRequestResponse(ctx context.Context, gvk schema.GroupVersionKind, key string, runtimeObject runtime.Object, trigger bool) (Request, *response, error) {
+func (m *HandlerSet) newRequestResponse(ctx context.Context, gvk schema.GroupVersionKind, key string, runtimeObject runtime.Object, trigger bool) (Request, *response) {
 	var (
 		obj = toObject(runtimeObject)
 	)
@@ -176,7 +176,7 @@ func (m *HandlerSet) newRequestResponse(ctx context.Context, gvk schema.GroupVer
 		Key:       key,
 	}
 
-	return req, &resp, nil
+	return req, &resp
 }
 
 func (m *HandlerSet) AddHandler(name string, objType kclient.Object, handler Handler) {
@@ -311,10 +311,7 @@ func (m *HandlerSet) handleError(req Request, resp Response, err error) error {
 }
 
 func (m *HandlerSet) handle(ctx context.Context, gvk schema.GroupVersionKind, key string, unmodifiedObject runtime.Object, trigger bool) (runtime.Object, error) {
-	req, resp, err := m.newRequestResponse(ctx, gvk, key, unmodifiedObject, trigger)
-	if err != nil {
-		return nil, err
-	}
+	req, resp := m.newRequestResponse(ctx, gvk, key, unmodifiedObject, trigger)
 
 	handles := m.handlers.Handles(req)
 	if handles {
@@ -356,7 +353,7 @@ func (m *HandlerSet) handle(ctx context.Context, gvk schema.GroupVersionKind, ke
 		}
 	}
 
-	return req.Object, m.handleError(req, resp, err)
+	return req.Object, m.handleError(req, resp, nil)
 }
 
 type ResponseAttributes struct {
